@@ -7,6 +7,7 @@ LIBNAME reco'/folders/myfolders/KNN/Data'; 		/* Data directory specification    
 /**************************************************************************************/
 
 /*maso*/
+/*3*/
 /*test*/
 
 
