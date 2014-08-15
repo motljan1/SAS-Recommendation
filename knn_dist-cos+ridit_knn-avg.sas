@@ -6,10 +6,8 @@ LIBNAME reco'/folders/myfolders/KNN/Data'; 		/* Data directory specification    
 %let DistanceMethod=cosine;						/* Distance measure method	  		  */
 /**************************************************************************************/
 
-/*maso*/
-/*3*/
-/*test*/
 
+/**sublime*/
 
 /*** Sampling - divide to training (L) and testing(T) ***/
 data reco.Sample;
