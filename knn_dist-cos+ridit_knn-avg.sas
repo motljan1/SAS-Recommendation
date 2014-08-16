@@ -7,7 +7,6 @@ LIBNAME reco'/folders/myfolders/KNN/Data'; 		/* Data directory specification    
 /**************************************************************************************/
 
 
-/**sublime*/
 
 /*** Sampling - divide to training (L) and testing(T) ***/
 data reco.Sample;
@@ -19,6 +18,8 @@ data reco.Sample;
 	then DevSample='L';
     else DevSample='T';
 run;
+
+
 
 
 
@@ -172,6 +173,28 @@ run;
 
 
 
+/******************************************************************* KNN PREP. ******************************/
+proc iml;
+use reco.base_dense_avged;
+read all into rating;
+close;
+
+do user= 1 to nrow(rating);
+	userAVG=  sum(rating[user, ])/countn(rating[user, ]);
+	
+do replacement = 1 to ncol(rating);
+	rat = rating [user, replacement] ;
+	rating [user, replacement] = rat - userAVG;
+	end;
+end;
+
+create reco.base_dense_avgedNorm from rating ;
+append from rating ;
+close reco.base_dense_avgedNorm;
+quit;
+
+
+
 
 /* Ridit – transform rating to 0-1 interval ************************************************************         RIDIT    */
 /* base_dense_ridit       OUT */
@@ -316,6 +339,7 @@ quit;
 
 
 
+
 /* k-NN result balancing: prepare tables */
 proc sql;
 create table reco.knn_all_debiased as
@@ -352,78 +376,61 @@ run;
 
 
 
+/******************************************************/
+/********************* EVALUATION *********************/
+/******************************************************/
 
-/*** Evaluation ***/
 
 
-/* Tell SAS that the table is sorted to accelerate subsequent queries */
-proc sort data=reco.knn_all_debiased_II presorted; 
+
+/* Sort */
+proc sort data=reco.Sample;
 by UserId ItemId;
 run;
 
 
-
-
+ 
+/* Data to evaluate*/
 %let PredRating = PredRatingBounded;		/* PredRatingBounded */
 %let tableName  = reco.knn_all_debiased_II; /* reco.knn_all_debiased_II */
 
-/* Merge & Square Error */
+/* Tell SAS that the table is sorted to accelerate subsequent queries */
+proc sort data=&tableName presorted; 
+by UserId ItemId;
+run;
+ 
+/* Merge target and prediction & calculate Square Error */
+data reco.rmse_merged(keep=SquareDiff);
+     merge reco.sample(keep=UserId ItemID Rating DevSample where=(DevSample="T") in=a)
+           &tableName(keep=UserId ItemID &PredRating in=b);
+     by UserId ItemID;
+     if a & b;
+     SquareDiff = (Rating-&PredRating)*(Rating-&PredRating);
+     Diff 		= round(sqrt((Rating-&PredRating )*(Rating-&PredRating )));
+run;
+
+/* Save rounded Predictions */
 proc sql;
-create table reco.rmse_merged as
-	select a.UserId
-		 , a.ItemId
-		 , a.Rating
-		 , b.PredRating
-		 , b.&PredRating 
-		 , a.DevSample
-		 , (Rating-&PredRating )*(Rating-&PredRating ) as SquareDiff
-		 , round(sqrt((Rating-&PredRating )*(Rating-&PredRating ))) as diff
-	from reco.sample a
-	left join &tableName   /* reco.knn_all_debiased_II */ b /*_debiased_ii*/
-	on (a.ItemId = b.ItemId) and (a.UserID = b.UserID)
-	where DevSample = "T";
-quit;
-
-
-/* Merge & Square Error 
-proc sql;
-create table reco.rmse_merged as
-	select a.UserId
-		 , a.ItemId
-		 , a.Rating
-		 , b.PredRating
-		 , b.PredRatingBounded
-		 , a.DevSample
-		 , (Rating-PredRatingBounded)*(Rating-PredRatingBounded) as SquareDiff
-		 , round(sqrt((Rating-PredRatingBounded)*(Rating-PredRatingBounded))) as diff
-	from reco.sample a
-	left join reco.knn_all_debiased_II  b 
-	on (a.ItemId = b.ItemId) and (a.UserID = b.UserID)
-	where DevSample = "T";
-quit;
-*/
-
-
-/* Report RMSE */
-proc sql;
-create table reco.rmse as
-	select sqrt(avg(SquareDiff)) as RMSE
+create table reco.rmse_success as
+	select round(sqrt(SquareDiff)) as Diff
 	from reco.rmse_merged;
 quit;
 
+
 Title3 "RMSE";
-/**RMSE to var**/
+/* Print RMSE */
 proc sql;
 select sqrt(avg(SquareDiff))
 into: RMSE
 from reco.rmse_merged;
 quit;
 
+
 /* Report Prediction Succes */
 Title3 "Differences: Success, Diff1-Diff4, SUM";
 proc iml;
-use reco.rmse_merged ;
-read all var {diff} into diff;
+use reco.rmse_success ;
+read all var {Diff} into diff;
 close; 
 
 t = countn (diff);
@@ -431,20 +438,16 @@ t = countn (diff);
 counts = J(2, 6, 0);
 
 	do d = 1 to 5;
-		c=0;s
+		c=0;
 		do dr = 1 to nrow(diff);
 			if diff[dr] = d-1 then do;
 				c = c+1;
 			end;
 		end;
 		
-		/*counts [1,d] = countn (diff) ;*/
-		
 		p = 100 * c / t;
-		
 		counts[1,d] = c;
-		counts[2,d] = p;
-		
+		counts[2,d] = p;	
 	end;
 counts[1,6] = sum (counts [1, ]);
 counts[2,6] = sum (counts [2, ]);
