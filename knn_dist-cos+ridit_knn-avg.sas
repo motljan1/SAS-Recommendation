@@ -173,32 +173,14 @@ run;
 
 
 
-/******************************************************************* KNN PREP. ******************************/
-proc iml;
-use reco.base_dense_avged;
-read all into rating;
-close;
-
-do user= 1 to nrow(rating);
-	userAVG=  sum(rating[user, ])/countn(rating[user, ]);
-	
-do replacement = 1 to ncol(rating);
-	rat = rating [user, replacement] ;
-	rating [user, replacement] = rat - userAVG;
-	end;
-end;
-
-create reco.base_dense_avgedNorm from rating ;
-append from rating ;
-close reco.base_dense_avgedNorm;
-quit;
-
 
 
 
 /* Ridit – transform rating to 0-1 interval ************************************************************         RIDIT    */
 /* base_dense_ridit       OUT */
 /* base_dense_null        IN  */
+
+
 proc iml;
 use reco.base_dense_null;
 read all into ratings;
