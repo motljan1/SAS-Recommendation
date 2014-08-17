@@ -4,6 +4,7 @@ LIBNAME reco'/folders/myfolders/KNN/Data'; 		/* Data directory specification    
 %let RandomSeed = 955;							/* Dividing random number seed)       */
 %let k=80; 	/* default 50 */					/* Count of nearest neighbors to find */ 
 %let DistanceMethod=cosine;						/* Distance measure method	  		  */
+%let N=2; 	/* default 20 */					/* number of principal components to be computed*/
 /**************************************************************************************/
 
 
@@ -17,6 +18,11 @@ data reco.Sample;
     if U<=0.80 
 	then DevSample='L';
     else DevSample='T';
+run;
+
+/* Sort */
+proc sort data=reco.Sample;
+by UserId ItemId;
 run;
 
 
@@ -179,55 +185,66 @@ run;
 /* Ridit – transform rating to 0-1 interval ************************************************************         RIDIT    */
 /* base_dense_ridit       OUT */
 /* base_dense_null        IN  */
+PROC FREQ DATA=reco.sample(where=(DevSample="L"))
+	ORDER=INTERNAL
+	noprint;
+	TABLES Rating / 
+		OUT=reco.OneWay 
+		SCORES=ridit;
+	by UserId;
+RUN;
 
+data reco.ridit;
+set reco.OneWay;
+retain cumsum;
+if UserId ^= lag(UserId) then cumsum = 0;
+cumsum = cumsum + percent;
+ridit = (cumsum - percent/2)/100;
+run;
+
+proc sql;
+create table reco.ridit_sparse as
+	select a.UserID
+		,  a.ItemID
+		,  a.rating
+		,  b.ridit
+	from reco.sample a
+	left join reco.ridit b
+	on a.UserID = b.UserID and a.rating = b.rating
+	where DevSample="L";	
+quit;
 
 proc iml;
-use reco.base_dense_null;
-read all into ratings;
+/* Read data*/
+use reco.ridit_sparse;
+read all var{ridit UserId ItemId};
 close;
+/* combine UserId ItemId ridit into a sparse matrix */
+/*       Value	||	Row	  ||  Col     				 */
+sparse = ridit|| UserId || ItemId;
 
-do usr = 1 to nrow(ratings);
-
-c1=0; c2=0; c3=0; c4=0; c5=0;
-	
-	do rating = 1 to ncol(ratings);
-		if ratings [usr,rating] = 1 then do;
-			c1 = c1 + 1; end;
-		if ratings [usr,rating] = 2 then do;
-			c2 = c2 + 2; end;
-		if ratings [usr,rating] = 3 then do;
-			c3 = c3 + 3; end;
-		if ratings [usr,rating] = 4 then do;
-			c4 = c4 + 4; end;
-		if ratings [usr,rating] = 5 then do;
-			c5 = c5 + 5; end;
-	end;
-	
-	rsum = sum(c1,c2,c3,c4,c5);
-	w1 = 0.5*(c1/rsum);
-	w2 = 0.5*(c2/rsum) + (c1/rsum);
-	w3 = 0.5*(c3/rsum) + (c2/rsum) + (c1/rsum);
-	w4 = 0.5*(c4/rsum) + (c3/rsum) + (c2/rsum) + (c1/rsum);
-	w5 = 0.5*(c5/rsum) + (c4/rsum) + (c3/rsum) + (c2/rsum) + (c1/rsum);
-
-	do rat = 1 to ncol(ratings);
-		if ratings [usr,rat] = 1 then do;
-			ratings [usr,rat] = w1; end;
-		if ratings [usr,rat] = 2 then do;
-			ratings [usr,rat] = w2; end;
-		if ratings [usr,rat] = 3 then do;
-			ratings [usr,rat] = w3; end;
-		if ratings [usr,rat] = 4 then do;
-			ratings [usr,rat] = w4; end;
-		if ratings [usr,rat] = 5 then do;
-			ratings [usr,rat] = w5; end;
-	end;
-end;	
-		
-create reco.base_dense_ridit from ratings ;
-append from ratings ;
-close reco.base_dense_ridit;
+/* Conversion sparse to dense matrix*/
+/*	|		ItemID	ItemID |		*/
+/*	|UserID				   |		*/
+/*	|UserID			ridit  |        */
+dense = full(sparse);
+/* Store data */
+create reco.ridit_dense from dense;
+append from dense;
+close reco.ridit_dense;
 quit;
+
+
+/* optional: SVD for euclid distance */
+/* Dimensionality reduction **********/
+proc princomp 
+	data=reco.base_dense
+	out=reco.base_svd
+	noprint
+	cov 
+	n=&N; /* The optimal value can be different */
+    var Col1-Col1000;  /* Should use all ItemIds */
+run;
 
 
 
@@ -236,7 +253,7 @@ quit;
 proc distance 
 	SHAPE=SQR
 	REPONLY
-	data=reco.base_dense_ridit /* ridit*/ /* avged */ /* normalized  */
+	data=reco.ridit_dense /* ridit*/ /* avged */ /* normalized  */
 	method= &DistanceMethod 
 	out=reco.distance;
     var ratio /*interval*/ (Col1-Col1682);
@@ -365,10 +382,6 @@ run;
 
 
 
-/* Sort */
-proc sort data=reco.Sample;
-by UserId ItemId;
-run;
 
 
  
@@ -377,7 +390,7 @@ run;
 %let tableName  = reco.knn_all_debiased_II; /* reco.knn_all_debiased_II */
 
 /* Tell SAS that the table is sorted to accelerate subsequent queries */
-proc sort data=&tableName presorted; 
+proc sort data=&tableName presorted;
 by UserId ItemId;
 run;
  
