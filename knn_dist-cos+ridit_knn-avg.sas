@@ -91,9 +91,8 @@ close;
 sparse = Rating || UserId || ItemId;
 
 /* Conversion sparse to dense matrix*/
-/*	|		ItemID	ItemID |		*/
-/*	|UserID				   |		*/
-/*	|UserID			Rating |        */
+/*			ItemID   				*/
+/*	UserID	Rating          		*/
 dense = full(sparse);
 /* Store data */
 create reco.base_dense from dense;
@@ -189,13 +188,13 @@ PROC FREQ DATA=reco.sample(where=(DevSample="L"))
 	ORDER=INTERNAL
 	noprint;
 	TABLES Rating / 
-		OUT=reco.OneWay 
+		OUT=work.OneWay 
 		SCORES=ridit;
 	by UserId;
 RUN;
 
 data reco.ridit;
-set reco.OneWay;
+set work.OneWay;
 retain cumsum;
 if UserId ^= lag(UserId) then cumsum = 0;
 cumsum = cumsum + percent;
@@ -215,37 +214,40 @@ create table reco.ridit_sparse as
 quit;
 
 proc iml;
-/* Read data*/
 use reco.ridit_sparse;
 read all var{ridit UserId ItemId};
 close;
-/* combine UserId ItemId ridit into a sparse matrix */
-/*       Value	||	Row	  ||  Col     				 */
-sparse = ridit|| UserId || ItemId;
 
-/* Conversion sparse to dense matrix*/
-/*	|		ItemID	ItemID |		*/
-/*	|UserID				   |		*/
-/*	|UserID			ridit  |        */
+sparse = ridit|| UserId || ItemId;
 dense = full(sparse);
-/* Store data */
+
 create reco.ridit_dense from dense;
 append from dense;
 close reco.ridit_dense;
 quit;
 
 
-/* optional: SVD for euclid distance */
+
+/* optional: SVD for euclid distance *****************************************************************        SVD   */
 /* Dimensionality reduction **********/
 proc princomp 
 	data=reco.base_dense
-	out=reco.base_svd
+	out=work.base_svd
 	noprint
 	cov 
-	n=&N; /* The optimal value can be different */
-    var Col1-Col1000;  /* Should use all ItemIds */
+	n=&N; 
+    var Col1-Col1000;  /* 1000 original: Should use all ItemIds */
 run;
 
+proc iml;
+use work.base_svd ;
+read all var _num_ into inputData;
+close;
+principal = inputData[, 1683:ncol(inputData)];
+create reco.svd from principal ;
+append from principal ;
+close reco.svd;
+quit;
 
 
 
@@ -299,7 +301,7 @@ k = &k;
 /* Initialisation */
 nearestNeighbor = J(nrow(rating ), k, 0); 			/* Matrix of nearest neighbors */
 recommendation = J(nrow(rating), ncol(rating), 0);	/* Matrix with the estimated rating */
-distance = J(nrow(rating ), 1, 0 ) /*10**10*/; 	        /* Vector of distances *************************************************************/
+distance = J(nrow(rating ), 1, 0 ) /*10**10*/; 	    /* Vector of distances *************************************************************/
 
 /* Loop - get the nearest neighbours */
 do reference = 1 to nrow(rating );
@@ -336,40 +338,15 @@ rename Col3 = ItemId;
 quit;
 
 
-
-
-
-/* k-NN result balancing: prepare tables */
-proc sql;
-create table reco.knn_all_debiased as
-select 
-k.PredRating,
-a.Bias,
-k.UserID, 
-k.ItemID
-From reco.knn_all k 
-left join reco.AVG_UserID a
-on k.userID = a.userID;
-quit;
-
-/* k-NN result balancing */
-proc sql;
-create table reco.knn_all_debiased_II as
-select 
-PredRating + Bias as PredRating,
-UserID, 
-ItemID
-From reco.knn_all_debiased ;
-quit;
-
-
-/*** Bound to limits ***/
-data reco.knn_all_debiased_II;
-set reco.knn_all_debiased_II ;
-    PredRatingBounded= 
-	min(max(PredRating, &MinRating ),&MaxRating);
+/* Debias k-NN rating prediction and bound to limits */
+data reco.knn_all_debiased (keep=UserID ItemID PredRating PredRatingBounded);
+	 merge reco.knn_all    (keep=UserID ItemID PredRating in=a)
+		   reco.AVG_UserID (keep=UserId Bias in=b);
+	 by UserId;
+	 if a & b;
+	 PredRating = PredRating + Bias;
+	 PredRatingBounded = min(max(PredRating, &MinRating ),&MaxRating);
 run;
-
 
 
 
@@ -387,7 +364,7 @@ run;
  
 /* Data to evaluate*/
 %let PredRating = PredRatingBounded;		/* PredRatingBounded */
-%let tableName  = reco.knn_all_debiased_II; /* reco.knn_all_debiased_II */
+%let tableName  = reco.knn_all_debiased; /* reco.knn_all_debiased_II */
 
 /* Tell SAS that the table is sorted to accelerate subsequent queries */
 proc sort data=&tableName presorted;
@@ -448,19 +425,3 @@ counts[1,6] = sum (counts [1, ]);
 counts[2,6] = sum (counts [2, ]);
 print counts;
 quit;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
